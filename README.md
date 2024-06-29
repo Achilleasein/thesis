@@ -23,6 +23,7 @@ Beat is different than rhythm
 - http://marsyas.info/
 - https://github.com/marsyas/marsyas
 - https://core.ac.uk/download/pdf/81077583.pdf
+- https://www.iccs-meeting.org/archive/iccs2023/papers/140730692.pdf
 
 # Music used:
 
