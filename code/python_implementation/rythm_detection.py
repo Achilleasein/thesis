@@ -4,7 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from filterbank_module import read_mp3, create_filterbank
 from envelope_module import get_envelope
-from diff_rect_module import diff_rect  # Import the diff-rect function
+from diff_rect_module import diff_rect
+from comb_filter_module import analyze_tempo
 
 # Define the frequency bands following Scheirer (1998)
 def get_scheirer_bands(fs):
@@ -24,6 +25,9 @@ file_paths = [
     '../../music_files/celebration.mp3'  # Replace with the actual path to the second MP3
 ]
 
+# Define tempos to analyze (in BPM)
+tempo_range = np.arange(60, 180, 1)  # Analyze tempos from 60 to 180 BPM with 1 BPM resolution
+
 # Process each file
 for filename in file_paths:
     print(f"Processing file: {filename}")
@@ -37,17 +41,19 @@ for filename in file_paths:
     # Apply the filterbank to detect rhythm-related frequency bands
     filtered_signals = create_filterbank(signal, fs, bands)
 
-    # Calculate and plot the envelope and diff-rect signals of each band
+    # Calculate the envelope, diff-rect, and comb filter energies for each band
     t = np.arange(len(signal)) / fs
     plt.figure(figsize=(12, 15))
     plt.suptitle(f'Analysis for {filename}', fontsize=16)
 
     # Plot original signal
-    plt.subplot(len(bands) * 2 + 1, 1, 1)
+    plt.subplot(len(bands) + 1, 1, 1)
     plt.plot(t, signal)
     plt.title('Original Signal')
     plt.xlabel('Time [s]')
     plt.ylabel('Amplitude')
+
+    total_energies = np.zeros_like(tempo_range, dtype=float)
 
     for i, filtered_signal in enumerate(filtered_signals):
         # Step 1: Calculate envelope
@@ -56,19 +62,26 @@ for filename in file_paths:
         # Step 2: Apply diff-rect
         diff_rect_signal = diff_rect(envelope, fs)
 
-        # Plot envelope
-        plt.subplot(len(bands) * 2 + 1, 1, i * 2 + 2)
-        plt.plot(t, envelope)
-        plt.title(f'Envelope of Band {i+1}: {bands[i][0]}-{bands[i][1]} Hz')
-        plt.xlabel('Time [s]')
-        plt.ylabel('Amplitude')
+        # Step 3: Apply comb filter analysis
+        energies = analyze_tempo(diff_rect_signal, fs, tempo_range)
+        total_energies += energies
 
         # Plot diff-rect signal
-        plt.subplot(len(bands) * 2 + 1, 1, i * 2 + 3)
-        plt.plot(t, diff_rect_signal)
-        plt.title(f'Diff-Rect of Band {i+1}: {bands[i][0]}-{bands[i][1]} Hz')
-        plt.xlabel('Time [s]')
-        plt.ylabel('Amplitude')
+        plt.subplot(len(bands) + 1, 1, i + 2)
+        plt.plot(tempo_range, energies)
+        plt.title(f'Tempo Energies for Band {i+1}: {bands[i][0]}-{bands[i][1]} Hz')
+        plt.xlabel('Tempo (BPM)')
+        plt.ylabel('Energy')
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout for the title
+    # Plot total energies across all bands
+    plt.figure()
+    plt.plot(tempo_range, total_energies)
+    plt.title('Total Tempo Energies Across All Bands')
+    plt.xlabel('Tempo (BPM)')
+    plt.ylabel('Energy')
+
+    # Find the fundamental tempo
+    fundamental_tempo = tempo_range[np.argmax(total_energies)]
+    print(f"Fundamental Tempo: {fundamental_tempo} BPM")
+
     plt.show()
