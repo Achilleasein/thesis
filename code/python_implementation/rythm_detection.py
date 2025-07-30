@@ -25,20 +25,15 @@ file_paths = [
     '../../music_files/celebration.mp3'  # Replace with the actual path to the second MP3
 ]
 
-# Define tempos to analyze (in BPM)
 tempo_range = np.arange(60, 180, 1)  # Analyze tempos from 60 to 180 BPM with 1 BPM resolution
 
-# Process each file
 for filename in file_paths:
     print(f"Processing file: {filename}")
 
-    # Read the MP3 file
     signal, fs = read_mp3(filename)
 
-    # Get frequency bands based on the sampling rate
     bands = get_scheirer_bands(fs)
 
-    # Apply the filterbank to detect rhythm-related frequency bands
     filtered_signals = create_filterbank(signal, fs, bands)
 
     # Calculate the envelope, diff-rect, and comb filter energies for each band
