@@ -1,7 +1,8 @@
 # comb_filter_module.py
 
 import numpy as np
-from numpy.fft import fft, ifft
+from scipy.fft import rfft, next_fast_len  # real FFT for speed/memory
+
 
 def create_comb_filter(fs, tempo, num_impulses=3):
     """
@@ -15,10 +16,13 @@ def create_comb_filter(fs, tempo, num_impulses=3):
     Returns:
         np.ndarray: The comb filter in the time domain.
     """
-    period = int(fs * 60 / tempo)  # Period of the comb filter in samples
-    comb_filter = np.zeros(period * (num_impulses - 1) + 1)
-    comb_filter[::period] = 1  # Set impulses at periodic intervals
+    # Ensure at least one-sample period to avoid zero/negative sizes
+    period = max(1, int(fs * 60.0 / float(tempo)))  # Period of the comb filter in samples
+    # Comb length covers num_impulses impulses spaced by period
+    comb_filter = np.zeros(period * (num_impulses - 1) + 1, dtype=float)
+    comb_filter[::period] = 1.0  # Set impulses at periodic intervals
     return comb_filter
+
 
 def analyze_tempo(signal, fs, tempos, num_impulses=3):
     """
@@ -33,26 +37,34 @@ def analyze_tempo(signal, fs, tempos, num_impulses=3):
     Returns:
         np.ndarray: Energy of the signal for each tempo.
     """
-    # Transform the signal to the frequency domain
-    signal_freq = fft(signal, n=signal.size + max(int(fs * 60 / tempos.min()), len(signal)))
+    signal = np.asarray(signal, dtype=float)
+    if signal.ndim != 1:
+        signal = signal.ravel()
+
+    # Determine an efficient FFT length:
+    # - Pad enough so the comb filter length fits when convolving in frequency domain
+    # - Use next_fast_len for speed
+    min_tempo = float(np.min(tempos))
+    max_period = max(1, int(fs * 60.0 / min_tempo))  # largest spacing among tempos
+    n_desired = signal.size + max_period
+    n_fast = next_fast_len(n_desired)
+
+    # Compute real FFT of the signal once (reuse for all tempos)
+    signal_freq = rfft(signal, n=n_fast)
 
     energies = []
+    # We can compute the energy directly in the frequency domain using Parseval's theorem,
+    # avoiding an inverse FFT for each tempo.
+    scale = 1.0 / n_fast  # Parseval scaling for numpy/scipy FFT conventions
 
     for tempo in tempos:
-        # Create comb filter in time domain
-        comb_filter = create_comb_filter(fs, tempo, num_impulses)
+        # Create comb filter and transform with the same FFT length
+        comb_filter = create_comb_filter(fs, float(tempo), num_impulses)
+        comb_filter_freq = rfft(comb_filter, n=n_fast)
 
-        # Transform comb filter to frequency domain
-        comb_filter_freq = fft(comb_filter, n=signal_freq.size)
-
-        # Convolve by multiplying in the frequency domain
-        convolved_freq = signal_freq * comb_filter_freq
-
-        # Transform back to the time domain
-        convolved_signal = np.real(ifft(convolved_freq))
-
-        # Calculate energy of the convolved signal
-        energy = np.sum(convolved_signal ** 2)
+        # Energy of the convolution in time domain equals (1/N) * sum |X[k]*H[k]|^2
+        yh_mag2 = np.abs(signal_freq * comb_filter_freq) ** 2
+        energy = float(np.sum(yh_mag2) * scale)
         energies.append(energy)
 
-    return np.array(energies)
+    return np.array(energies, dtype=float)
