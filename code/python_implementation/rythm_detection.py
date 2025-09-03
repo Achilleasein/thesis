@@ -2,22 +2,26 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from filterbank_module import read_mp3, create_filterbank
-from envelope_module import get_envelope
-from diff_rect_module import diff_rect
+import numpy as np
+
 from comb_filter_module import analyze_tempo
+from diff_rect_module import diff_rect
+from envelope_module import get_envelope
+from filterbank_module import read_mp3, create_filterbank
+
 
 # Define the frequency bands following Scheirer (1998)
 def get_scheirer_bands(fs):
     nyquist = fs / 2
     return [
-        (1, 200),                       # Band 1: 1-200 Hz (avoid 0 Hz)
-        # (200, 400),                     # Band 2: 200-400 Hz
-        # (400, 800),                     # Band 3: 400-800 Hz
-        # (800, 1600),                    # Band 4: 800-1600 Hz
-        # (1600, 3200),                   # Band 5: 1600-3200 Hz
-        # (3200, min(nyquist, 5000))      # Band 6: 3200 Hz to Nyquist Frequency (or a cap if fs is high)
+        (1, 200),  # Band 1: 1-200 Hz (avoid 0 Hz)
+        (200, 400),  # Band 2: 200-400 Hz
+        (400, 800),  # Band 3: 400-800 Hz
+        (800, 1600),  # Band 4: 800-1600 Hz
+        (1600, 3200),  # Band 5: 1600-3200 Hz
+        (3200, min(nyquist, 5000))  # Band 6: 3200 Hz to Nyquist Frequency (or a cap if fs is high)
     ]
+
 
 # List of MP3 file paths
 file_paths = [
@@ -64,7 +68,7 @@ for filename in file_paths:
         # Plot diff-rect signal
         plt.subplot(len(bands) + 1, 1, i + 2)
         plt.plot(tempo_range, energies)
-        plt.title(f'Tempo Energies for Band {i+1}: {bands[i][0]}-{bands[i][1]} Hz')
+        plt.title(f'Tempo Energies for Band {i + 1}: {bands[i][0]}-{bands[i][1]} Hz')
         plt.xlabel('Tempo (BPM)')
         plt.ylabel('Energy')
 
