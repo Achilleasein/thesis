@@ -12,8 +12,8 @@ def get_scheirer_bands(fs):
     nyquist = fs / 2
     return [
         (1, 200),                       # Band 1: 1-200 Hz (avoid 0 Hz)
-        (200, 400),                     # Band 2: 200-400 Hz
-        (400, 800),                     # Band 3: 400-800 Hz
+        # (200, 400),                     # Band 2: 200-400 Hz
+        # (400, 800),                     # Band 3: 400-800 Hz
         # (800, 1600),                    # Band 4: 800-1600 Hz
         # (1600, 3200),                   # Band 5: 1600-3200 Hz
         # (3200, min(nyquist, 5000))      # Band 6: 3200 Hz to Nyquist Frequency (or a cap if fs is high)
