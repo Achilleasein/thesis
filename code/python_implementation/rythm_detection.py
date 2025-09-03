@@ -1,85 +1,127 @@
-# rhythm_detection.py
+# rythm_detection.py
 
-import matplotlib.pyplot as plt
+import os
+import sys
 import numpy as np
+import logging
 
 from comb_filter_module import analyze_tempo
 from diff_rect_module import diff_rect
 from envelope_module import get_envelope
 from filterbank_module import read_mp3, create_filterbank
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("rythm_detection")
 
-# Define the frequency bands following Scheirer (1998)
-def get_scheirer_bands(fs):
+def get_scheirer_bands(fs: int) -> list[tuple[int, int]]:
+    """
+    Define the frequency bands for analysis (can be expanded as needed).
+    """
     nyquist = fs / 2
     return [
-        (1, 200),  # Band 1: 1-200 Hz (avoid 0 Hz)
-        (200, 400),  # Band 2: 200-400 Hz
-        (400, 800),  # Band 3: 400-800 Hz
-        (800, 1600),  # Band 4: 800-1600 Hz
-        (1600, 3200),  # Band 5: 1600-3200 Hz
-        (3200, min(nyquist, 5000))  # Band 6: 3200 Hz to Nyquist Frequency (or a cap if fs is high)
+        (1, 200),
+        (200, 400),
+        (400, 800),
+        (800, 1600),
+        (1600, 3200),
+        (3200, min(nyquist, 5000))
     ]
 
+def main() -> int:
+    # Determine input files: use CLI args if two provided, else fallback
+    cli_files = [p for p in sys.argv[1:] if p.strip()]
+    if len(cli_files) == 2:
+        file_paths = cli_files
+        logger.info("Using CLI-provided files:\n  1) %s\n  2) %s", file_paths[0], file_paths[1])
+    else:
+        file_paths = [
+            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "music_files", "pathfinder.mp3")),
+            os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "music_files", "celebration.mp3")),
+        ]
+        logger.warning("CLI did not provide exactly 2 files; falling back to defaults:\n  1) %s\n  2) %s",
+                       file_paths[0], file_paths[1])
 
-# List of MP3 file paths
-file_paths = [
-    '../../music_files/pathfinder.mp3',
-    '../../music_files/celebration.mp3'  # Replace with the actual path to the second MP3
-]
+    # Prepare output directory next to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    results_dir = os.path.join(script_dir, "results")
+    os.makedirs(results_dir, exist_ok=True)
+    logger.info("Results directory: %s", results_dir)
 
-tempo_range = np.arange(60, 180, 1)  # Analyze tempos from 60 to 180 BPM with 1 BPM resolution
+    # Import plot handler only when needed (keeps plotting concerns separate)
+    from plot_handler import save_plots
+    logger.info("Plot handler loaded.")
 
-for filename in file_paths:
-    print(f"Processing file: {filename}")
+    # Tempo search range
+    tempo_range = np.arange(60, 180, 1, dtype=float)
+    logger.info("Tempo range: %d to %d BPM (step 1)", int(tempo_range.min()), int(tempo_range.max()))
 
-    signal, fs = read_mp3(filename)
+    for idx, filename in enumerate(file_paths, start=1):
+        logger.info("(%d/%d) Processing file: %s", idx, len(file_paths), filename)
 
-    bands = get_scheirer_bands(fs)
+        # Read audio
+        try:
+            signal, fs = read_mp3(filename)
+            logger.info("Read audio: fs=%d Hz, samples=%d", fs, len(signal))
+        except Exception as e:
+            logger.exception("Failed to read audio file: %s", filename)
+            continue
 
-    filtered_signals = create_filterbank(signal, fs, bands)
+        # Frequency bands
+        bands = get_scheirer_bands(fs)
+        logger.info("Bands: %s", ", ".join([f"{lo}-{hi} Hz" for (lo, hi) in bands]))
 
-    # Calculate the envelope, diff-rect, and comb filter energies for each band
-    t = np.arange(len(signal)) / fs
-    plt.figure(figsize=(12, 15))
-    plt.suptitle(f'Analysis for {filename}', fontsize=16)
+        # Filterbank
+        try:
+            filtered_signals = create_filterbank(signal, fs, bands)
+            logger.info("Created filterbank: %d band(s)", len(filtered_signals))
+        except Exception as e:
+            logger.exception("Failed to create filterbank for: %s", filename)
+            continue
 
-    # Plot original signal
-    plt.subplot(len(bands) + 1, 1, 1)
-    plt.plot(t, signal)
-    plt.title('Original Signal')
-    plt.xlabel('Time [s]')
-    plt.ylabel('Amplitude')
+        # Build time axis for original signal
+        t = np.arange(len(signal)) / fs
 
-    total_energies = np.zeros_like(tempo_range, dtype=float)
+        # Per-band energies collection (for plotting)
+        per_band_energies: list[np.ndarray] = []
+        for b_idx, filtered_signal in enumerate(filtered_signals, start=1):
+            lo, hi = bands[b_idx - 1]
+            logger.info("Band %d/%d (%d-%d Hz): envelope -> diff-rect -> comb energies",
+                        b_idx, len(filtered_signals), lo, hi)
+            try:
+                envelope = get_envelope(filtered_signal, fs)
+                diff_rect_signal = diff_rect(envelope, fs)
+                energies = analyze_tempo(diff_rect_signal, fs, tempo_range)
+                per_band_energies.append(energies)
+                logger.info("Band %d energies computed (len=%d)", b_idx, len(energies))
+            except Exception as e:
+                logger.exception("Failed processing band %d (%d-%d Hz)", b_idx, lo, hi)
+                per_band_energies.append(np.zeros_like(tempo_range))
 
-    for i, filtered_signal in enumerate(filtered_signals):
-        # Step 1: Calculate envelope
-        envelope = get_envelope(filtered_signal, fs)
+        # Delegate plotting and saving to the plot handler
+        try:
+            analysis_path, total_path, fundamental_tempo = save_plots(
+                input_filename=filename,
+                time_axis=t,
+                original_signal=signal,
+                bands=bands,
+                tempo_range=tempo_range,
+                per_band_energies=per_band_energies,
+                results_dir=results_dir,
+            )
+            logger.info("Saved plots:\n  analysis: %s\n  total: %s", analysis_path, total_path)
+            # Keep the plain prints for GUI auto-detection if needed (SAVED: lines printed by plot_handler)
+            logger.info("Fundamental Tempo: %.2f BPM", fundamental_tempo)
+            print(f"Fundamental Tempo: {fundamental_tempo} BPM")
+        except Exception as e:
+            logger.exception("Failed to save plots for: %s", filename)
+            continue
 
-        # Step 2: Apply diff-rect
-        diff_rect_signal = diff_rect(envelope, fs)
+    logger.info("Processing completed.")
+    return 0
 
-        # Step 3: Apply comb filter analysis
-        energies = analyze_tempo(diff_rect_signal, fs, tempo_range)
-        total_energies += energies
-
-        # Plot diff-rect signal
-        plt.subplot(len(bands) + 1, 1, i + 2)
-        plt.plot(tempo_range, energies)
-        plt.title(f'Tempo Energies for Band {i + 1}: {bands[i][0]}-{bands[i][1]} Hz')
-        plt.xlabel('Tempo (BPM)')
-        plt.ylabel('Energy')
-
-    # Plot total energies across all bands
-    plt.figure()
-    plt.plot(tempo_range, total_energies)
-    plt.title('Total Tempo Energies Across All Bands')
-    plt.xlabel('Tempo (BPM)')
-    plt.ylabel('Energy')
-
-    # Find the fundamental tempo
-    fundamental_tempo = tempo_range[np.argmax(total_energies)]
-    print(f"Fundamental Tempo: {fundamental_tempo} BPM")
-
-    plt.show()
+if __name__ == "__main__":
+    raise SystemExit(main())
