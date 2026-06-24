@@ -1,0 +1,11 @@
+# Normalise line endings: text files use LF in the repo regardless of OS.
+* text=auto eol=lf
+
+# Windows batch files, if ever added, must keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Treat binary assets as binary (no EOL conversion, no diff noise).
+*.mp3 binary
+*.png binary
+*.pdf binary

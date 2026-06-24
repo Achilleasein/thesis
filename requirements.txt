@@ -1,6 +1,9 @@
-pillow~=11.1.0
-matplotlib~=3.10.3
-numpy~=2.2.6
-scipy~=1.15.3
-soundfile~=0.12.1
-audioread~=3.0.0
+# Runtime dependencies (mirrors [project.dependencies] in pyproject.toml).
+# Floors (">=") instead of exact pins so the project keeps installing on new
+# Python releases and picks up platform-correct wheels automatically.
+numpy>=2.2
+scipy>=1.15
+matplotlib>=3.10
+soundfile>=0.12
+audioread>=3.0
+pillow>=11.0

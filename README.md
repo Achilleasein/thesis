@@ -1,5 +1,37 @@
 # thesis
 
+# Running the app
+
+The project runs on Windows, macOS and Linux. You only need a system Python
+(3.10 or newer) that includes Tk; everything else is installed automatically
+into a local virtual environment.
+
+```sh
+python run.py
+```
+
+This creates `.venv/`, installs the dependencies from `requirements.txt`, and
+launches the Rhythm Detector GUI. Useful flags:
+
+- `python run.py --recreate` — rebuild the virtual environment from scratch.
+- `python run.py --skip-install` — launch without reinstalling dependencies.
+
+If the launcher reports that Tkinter is missing, it prints the exact install
+command for your platform (e.g. `sudo apt install python3-tk`,
+`sudo dnf install python3-tkinter`, `brew install python-tk`, or re-running the
+python.org installer on Windows with the Tcl/Tk option enabled).
+
+## Running the tests
+
+```sh
+python -m pip install -r requirements.txt pytest
+python -m pytest
+```
+
+The headless smoke tests (decode → filterbank → tempo) are exercised on
+Windows, macOS and Linux across Python 3.10–3.13 by the GitHub Actions CI
+workflow.
+
 # Notes:
 Detecting beat from a song with drums is easy, will do it with fitlerbank
 Its different to detect the rhythm in a purely instrumental song.
