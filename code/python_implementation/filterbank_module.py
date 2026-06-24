@@ -1,22 +1,26 @@
 import numpy as np
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, sosfilt
 import soundfile as sf
 import logging
 
 logger = logging.getLogger(__name__)
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
+    # Second-order sections (SOS), not transfer-function (b, a): for the low
+    # bands the normalised cutoffs are tiny (e.g. 1/22050) and a high-order
+    # (b, a) polynomial is so ill-conditioned that lfilter overflows to inf/NaN.
+    # SOS keeps each biquad well-conditioned, so the cascade stays stable.
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
-    b, a = butter(order, [low, high], btype='band')
+    sos = butter(order, [low, high], btype='band', output='sos')
     logger.debug("Designed bandpass filter: low=%.3fHz high=%.3fHz fs=%d order=%d (normalized: [%.6f, %.6f])",
                  lowcut, highcut, fs, order, low, high)
-    return b, a
+    return sos
 
 def bandpass_filter(data, lowcut, highcut, fs, order=5):
-    b, a = butter_bandpass(lowcut, highcut, fs, order=order)
-    y = lfilter(b, a, data)
+    sos = butter_bandpass(lowcut, highcut, fs, order=order)
+    y = sosfilt(sos, data)
     logger.debug("Applied bandpass filter: low=%.3fHz high=%.3fHz fs=%d order=%d len=%d",
                  lowcut, highcut, fs, order, len(y))
     return y
