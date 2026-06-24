@@ -121,11 +121,18 @@ except ImportError as e:
     print(f"  ✗ PIL/ImageTk: {e}")
 
 try:
-    import pydub
-    print("  ✓ pydub")
+    import soundfile
+    print("  ✓ soundfile")
 except ImportError as e:
-    errors.append('pydub')
-    print(f"  ✗ pydub: {e}")
+    errors.append('soundfile')
+    print(f"  ✗ soundfile: {e}")
+
+try:
+    import audioread
+    print("  ✓ audioread")
+except ImportError as e:
+    errors.append('audioread')
+    print(f"  ✗ audioread: {e}")
 
 if errors:
     print(f'\nERROR: Failed to import: {", ".join(errors)}')
@@ -139,29 +146,13 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${GREEN}✓${NC} All dependencies verified"
 
-# Check for ffmpeg (required by pydub)
-if ! command -v ffmpeg &> /dev/null; then
-    echo -e "${YELLOW}Warning: ffmpeg is not installed.${NC}"
-    echo "pydub requires ffmpeg for audio file processing."
-    echo "Install it with: sudo dnf install ffmpeg"
-    echo ""
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        deactivate
-        exit 1
-    fi
-else
-    echo -e "${GREEN}✓${NC} ffmpeg is available"
-fi
-
 # Run the application
 echo -e "\n${BLUE}========================================${NC}"
 echo -e "${GREEN}Starting Rhythm Detector GUI...${NC}"
 echo -e "${BLUE}========================================${NC}\n"
 
 # Run the GUI (using the main entry point)
-python3 GUI/rythm_detector_gui.py
+python3 GUI/rhythm_detector_gui.py
 
 # Deactivate virtual environment on exit
 EXIT_CODE=$?

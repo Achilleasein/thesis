@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.signal import butter, lfilter
-from pydub import AudioSegment
+import soundfile as sf
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,55 @@ def create_filterbank(signal, fs, bands, order=5):
     logger.info("Filterbank created.")
     return filtered_signals
 
-def read_mp3(filename):
-    logger.info("Reading MP3: %s", filename)
-    audio = AudioSegment.from_mp3(filename)
-    data = np.array(audio.get_array_of_samples())
-    if audio.channels == 2:
-        data = data.reshape((-1, 2))
-        data = data[:, 0]
-        logger.debug("Stereo to mono: took left channel, samples=%d", len(data))
-    fs = audio.frame_rate
-    logger.info("MP3 loaded: channels=%d fs=%d samples=%d duration=%.2fs",
-                audio.channels, fs, len(data), len(data) / float(fs) if fs else -1.0)
+def _read_with_audioread(filename):
+    """Fallback decoder for formats libsndfile cannot read.
+
+    audioread uses whatever audio backend the OS provides (and does not require
+    a system ffmpeg install). It yields interleaved 16-bit PCM buffers, which we
+    concatenate and normalise to float in [-1, 1].
+    """
+    import audioread
+
+    with audioread.audio_open(filename) as f:
+        fs = f.samplerate
+        channels = f.channels
+        chunks = [np.frombuffer(buf, dtype="<i2") for buf in f]
+
+    if chunks:
+        data = np.concatenate(chunks).astype(np.float64) / 32768.0
+    else:
+        data = np.zeros(0, dtype=np.float64)
+
+    if channels and channels > 1:
+        data = data.reshape((-1, channels))
+    return data, fs
+
+
+def read_audio(filename):
+    """Read an audio file to a mono float signal and its sample rate.
+
+    Uses soundfile (libsndfile) first, which natively decodes WAV/FLAC/OGG and,
+    with the libsndfile bundled in recent wheels, MP3 as well. Falls back to
+    audioread for anything libsndfile cannot handle. Neither backend requires a
+    system ffmpeg install (unlike the previous pydub implementation).
+    """
+    logger.info("Reading audio: %s", filename)
+    try:
+        data, fs = sf.read(filename, always_2d=True)
+        logger.debug("Decoded with soundfile: shape=%s fs=%d", data.shape, fs)
+    except Exception as e:
+        logger.warning("soundfile could not read %s (%s); falling back to audioread", filename, e)
+        data, fs = _read_with_audioread(filename)
+
+    # Downmix to a single mono channel (mean across channels)
+    data = np.asarray(data, dtype=np.float64)
+    if data.ndim == 2 and data.shape[1] > 1:
+        logger.debug("Downmixing %d channels to mono", data.shape[1])
+        data = data.mean(axis=1)
+    else:
+        data = data.reshape(-1)
+
+    fs = int(fs)
+    logger.info("Audio loaded: fs=%d samples=%d duration=%.2fs",
+                fs, len(data), len(data) / float(fs) if fs else -1.0)
     return data, fs
