@@ -16,9 +16,9 @@ except ImportError:
 
 # Import code execution helper
 try:
-    from GUI.code_execution import run_rythm_detection
+    from GUI.code_execution import run_rhythm_detection
 except ImportError:
-    from code_execution import run_rythm_detection  # type: ignore
+    from code_execution import run_rhythm_detection  # type: ignore
 
 
 class GUIController:
@@ -259,13 +259,13 @@ class GUIController:
             self._workdir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 
             # Launch process
-            proc = run_rythm_detection([self.track1_path, self.track2_path])
+            proc = run_rhythm_detection([self.track1_path, self.track2_path])
             self.detection_proc = proc
 
             # Hook up streaming
             self._start_stream_readers(proc)
             if self.status_var:
-                self.status_var.set("Started rythm_detection.py...")
+                self.status_var.set("Started rhythm_detection.py...")
         except Exception as e:
             messagebox.showerror("Execution Error", f"Failed to start detection:\n{e}")
 

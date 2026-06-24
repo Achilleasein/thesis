@@ -1,0 +1,27 @@
+[project]
+name = "rhythm-detector"
+version = "0.1.0"
+description = "Filterbank-based musical beat & tempo detection (thesis project)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Dependency floors (">=") rather than exact pins: they keep the project
+# installable on new Python releases while still guaranteeing a minimum
+# feature set. requirements.txt mirrors this list for the plain pip/venv
+# workflow used by run.py and CI.
+dependencies = [
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "matplotlib>=3.10",
+    "soundfile>=0.12",
+    "audioread>=3.0",
+    "pillow>=11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

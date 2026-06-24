@@ -1,4 +1,4 @@
-# rythm_detection.py
+# rhythm_detection.py
 
 import os
 import sys
@@ -8,14 +8,14 @@ import logging
 from comb_filter_module import analyze_tempo
 from diff_rect_module import diff_rect
 from envelope_module import get_envelope
-from filterbank_module import read_mp3, create_filterbank
+from filterbank_module import read_audio, create_filterbank
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-logger = logging.getLogger("rythm_detection")
+logger = logging.getLogger("rhythm_detection")
 
 def get_scheirer_bands(fs: int) -> list[tuple[int, int]]:
     """
@@ -64,7 +64,7 @@ def main() -> int:
 
         # Read audio
         try:
-            signal, fs = read_mp3(filename)
+            signal, fs = read_audio(filename)
             logger.info("Read audio: fs=%d Hz, samples=%d", fs, len(signal))
         except Exception as e:
             logger.exception("Failed to read audio file: %s", filename)
