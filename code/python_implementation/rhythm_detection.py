@@ -45,8 +45,13 @@ def main() -> int:
         logger.warning("CLI did not provide exactly 2 files; falling back to defaults:\n  1) %s\n  2) %s",
                        file_paths[0], file_paths[1])
 
-    # Prepare output directory next to this script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Prepare output directory. When frozen by PyInstaller the script lives in a
+    # temporary extraction dir (_MEIPASS) that is deleted on exit, so write the
+    # results next to the executable instead; otherwise write next to this script.
+    if getattr(sys, "frozen", False):
+        script_dir = os.path.dirname(sys.executable)
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
     results_dir = os.path.join(script_dir, "results")
     os.makedirs(results_dir, exist_ok=True)
     logger.info("Results directory: %s", results_dir)
