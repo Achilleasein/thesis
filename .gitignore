@@ -32,6 +32,9 @@ MANIFEST
 *.manifest
 *.spec
 
+# ...except our hand-maintained build spec, which must be tracked for CI.
+!rhythm_detection.spec
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
