@@ -1,27 +1,45 @@
+"""Tk controller for the Rhythm Detector: widgets, log streaming and results.
+
+The module name keeps the capitalised form of its GUI/ package directory rather
+than snake_case, so the naming check is suppressed for this file alone.
+"""
+# pylint: disable=invalid-name
 import os
-import re
-import time
-import threading
 import queue
+import re
+import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, filedialog
+
 from PIL import Image, ImageTk
 
-
-# Import the separated file picker
+# Absolute imports when launched as a package, sibling imports when the GUI/
+# folder is itself the script directory (which is how run.py starts it).
 try:
     from GUI.file_picker import open_file_picker
-except ImportError:
-    from file_picker import open_file_picker  # type: ignore
-
-# Import code execution helper
-try:
     from GUI.code_execution import run_rhythm_detection
 except ImportError:
+    from file_picker import open_file_picker  # type: ignore
     from code_execution import run_rhythm_detection  # type: ignore
+
+# Enqueued once the worker's streams are fully drained, so the UI finalises only
+# after every real output line has been handled.
+_RUN_FINISHED = object()
+
+# The worker's machine-readable stdout lines. Module-level so the wire format can
+# be tested without constructing a controller (which needs a live Tk root):
+# rhythm_detection.format_tempo_line is the producer for TEMPO_LINE_RE, and
+# plot_handler prints the SAVED: lines. The tempo pattern puts the number before
+# the path so a path containing spaces is still captured whole.
+SAVED_LINE_RE = re.compile(r"^\s*SAVED:\s*(?P<path>.+\.(?:png|jpg|jpeg|bmp))\s*$", re.IGNORECASE)
+TEMPO_LINE_RE = re.compile(r"^\s*TEMPO:\s*(?P<bpm>[0-9]+(?:\.[0-9]+)?)\s*BPM\s+(?P<path>.+?)\s*$",
+                           re.IGNORECASE)
 
 
 class GUIController:
+    """Owns the main window: track selection, run control, log and results."""
+
     def __init__(self, root: tk.Tk, audio_extensions=(".mp3", ".wav", ".flac", ".ogg", ".m4a")) -> None:
         self.root = root
         self.audio_extensions = audio_extensions
@@ -50,10 +68,14 @@ class GUIController:
         self._workdir: str | None = None
         self._last_image_paths: list[str] = []
 
-        # Pattern to detect "SAVED: /path/to/image.png" lines from the process output
-        self._saved_line_re = re.compile(r"^\s*SAVED:\s*(?P<path>.+\.(?:png|jpg|jpeg|bmp))\s*$", re.IGNORECASE)
+        # Detected tempo area
+        self.tempo_frame: tk.LabelFrame | None = None
+        self._tempo_placeholder: tk.Label | None = None
+        self._tempo_results: list[tuple[str, float]] = []
+
 
     def build_ui(self) -> None:
+        """Construct every widget: controls bar, track rows, log and results gallery."""
         self.root.title("Rhythm Detector - File Selector")
         self.root.geometry("1600x1200")
         self.root.minsize(600, 400)
@@ -98,6 +120,12 @@ class GUIController:
             side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6)
         )
         tk.Button(row2, text="Choose...", command=self.select_track2).pack(side=tk.RIGHT)
+
+        # Detected tempo: the headline result, above the log so it is the first
+        # thing read. fill=X without expand keeps it compact as rows are added.
+        self.tempo_frame = tk.LabelFrame(self.root, text="Detected Tempo", padx=10, pady=8)
+        self.tempo_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self._clear_tempo_results()
 
         # Embedded Execution Log
         log_frame = tk.LabelFrame(self.root, text="Execution Log", padx=10, pady=10)
@@ -161,15 +189,44 @@ class GUIController:
         self._log_queue.put((text, tag))
 
     def _drain_log_queue(self) -> None:
+        # Runs on the Tk main thread (driven by root.after), so it is safe to
+        # touch widgets here -- including the tempo readout and the images
+        # announced by the worker's "TEMPO:" and "SAVED:" lines.
         try:
             while True:
                 text, tag = self._log_queue.get_nowait()
+                if text is _RUN_FINISHED:
+                    self._finalise_tempo_results()
+                    continue
                 self._append_log(text, tag)
+                self._maybe_show_tempo(text)
+                self._maybe_show_saved_image(text)
         except queue.Empty:
             pass
         finally:
             if self.root.winfo_exists():
                 self._log_after_id = self.root.after(50, self._drain_log_queue)
+
+    def _maybe_show_tempo(self, line: str) -> None:
+        """Show the detected tempo as soon as the worker reports it."""
+        match = TEMPO_LINE_RE.match(line)
+        if match is None:
+            return
+        try:
+            bpm = float(match.group("bpm"))
+        except ValueError:  # not a number after all; leave it in the log only
+            return
+        self._add_tempo_result(match.group("path").strip(), bpm)
+
+    def _maybe_show_saved_image(self, line: str) -> None:
+        """Render a plot as soon as the worker announces it with a SAVED: line."""
+        match = SAVED_LINE_RE.match(line)
+        if match is None:
+            return
+        path = match.group("path").strip()
+        if path in self._last_image_paths or not os.path.isfile(path):
+            return
+        self._append_image_card(path)
 
     def _start_log_pump_if_needed(self) -> None:
         if self._log_after_id is None and self.root.winfo_exists():
@@ -183,15 +240,27 @@ class GUIController:
             self._enqueue_log(f"[reader error: {e}]\n", "stderr")
 
     def _start_stream_readers(self, proc) -> None:
-        if getattr(proc, "stdout", None) is not None:
-            threading.Thread(target=self._reader_loop, args=(proc.stdout, "stdout"), daemon=True).start()
-        if getattr(proc, "stderr", None) is not None:
-            threading.Thread(target=self._reader_loop, args=(proc.stderr, "stderr"), daemon=True).start()
+        readers = []
+        for stream, tag in (("stdout", "stdout"), ("stderr", "stderr")):
+            fp = getattr(proc, stream, None)
+            if fp is not None:
+                thread = threading.Thread(target=self._reader_loop, args=(fp, tag), daemon=True)
+                readers.append(thread)
+                thread.start()
 
         def wait_and_mark():
             try:
                 code = proc.wait()
+                # Wait for the readers before announcing the end: proc.wait()
+                # can return while the last lines are still being enqueued, and
+                # finalising early would report "no tempo detected" for a run
+                # whose TEMPO: line simply had not been processed yet.
+                for thread in readers:
+                    thread.join(timeout=5)
                 self._enqueue_log(f"\n[process exited with code {code}]\n", "status")
+                # Queued rather than scheduled directly, so it is handled after
+                # every real line ahead of it in the same FIFO.
+                self._log_queue.put((_RUN_FINISHED, "status"))
                 # After completion, collect and show images created during this run
                 if self._run_start_time is not None:
                     images = self._collect_result_images(self._run_start_time)
@@ -243,8 +312,11 @@ class GUIController:
     # Run / Clear / Close
     # -----------------------
     def run_detection_clicked(self) -> None:
-        if not self.track1_path or not self.track2_path:
-            messagebox.showerror("Selection Error", "Please select both Track 1 and Track 2 before running the detection.")
+        """Launch the detector on whichever tracks are selected and stream its output."""
+        tracks = [p for p in (self.track1_path, self.track2_path) if p]
+        if not tracks:
+            messagebox.showerror("Selection Error",
+                                 "Please select at least one track before running the detection.")
             return
         try:
             # Clear previous log and results
@@ -252,6 +324,7 @@ class GUIController:
                 self.log_text.delete("1.0", tk.END)
                 self._append_log("Process started...\n", "status")
             self._clear_results()
+            self._clear_tempo_results()
 
             # Record start time and working directory
             self._run_start_time = time.time()
@@ -259,7 +332,7 @@ class GUIController:
             self._workdir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 
             # Launch process
-            proc = run_rhythm_detection([self.track1_path, self.track2_path])
+            proc = run_rhythm_detection(tracks)
             self.detection_proc = proc
 
             # Hook up streaming
@@ -279,8 +352,10 @@ class GUIController:
         if self.log_text is not None:
             self.log_text.delete("1.0", tk.END)
         self._clear_results()
+        self._clear_tempo_results()
 
     def on_close(self) -> None:
+        """Stop any running detection, cancel the log pump and destroy the window."""
         try:
             if self.detection_proc is not None:
                 try:
@@ -307,6 +382,60 @@ class GUIController:
             self.root.destroy()
 
     # -----------------------
+    # Detected tempo
+    # -----------------------
+    def _clear_tempo_results(self) -> None:
+        """Empty the tempo panel and put the placeholder back."""
+        if self.tempo_frame is None:
+            return
+        for child in list(self.tempo_frame.children.values()):
+            child.destroy()
+        self._tempo_results = []
+        self._tempo_placeholder = tk.Label(
+            self.tempo_frame,
+            text="Select one or two tracks and press Run Detection.",
+            anchor="w", fg="#555555",
+        )
+        self._tempo_placeholder.pack(fill=tk.X)
+
+    def _add_tempo_result(self, path: str, bpm: float) -> None:
+        """Append one '<track>  <bpm> BPM' row, replacing the placeholder."""
+        if self.tempo_frame is None:
+            return
+        if self._tempo_placeholder is not None:
+            self._tempo_placeholder.destroy()
+            self._tempo_placeholder = None
+
+        self._tempo_results.append((path, bpm))
+
+        row = tk.Frame(self.tempo_frame)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=os.path.basename(path), anchor="w",
+                 font=("TkDefaultFont", 12)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(row, text=f"{bpm:g} BPM", anchor="e",
+                 font=("TkDefaultFont", 20, "bold")).pack(side=tk.RIGHT)
+
+        if self.status_var:
+            self.status_var.set(f"{os.path.basename(path)}: {bpm:g} BPM")
+
+    def _finalise_tempo_results(self) -> None:
+        """After the worker exits, say so explicitly if nothing was detected.
+
+        An empty panel is ambiguous -- it looks the same as 'still running' --
+        so point at the log, which will hold the traceback.
+        """
+        if self.tempo_frame is None or self._tempo_results:
+            return
+        if self._tempo_placeholder is not None:
+            self._tempo_placeholder.destroy()
+        self._tempo_placeholder = tk.Label(
+            self.tempo_frame,
+            text="No tempo detected. See the execution log for details.",
+            anchor="w", fg="#7D1E1E",
+        )
+        self._tempo_placeholder.pack(fill=tk.X)
+
+    # -----------------------
     # Images (Results)
     # -----------------------
     def _clear_results(self) -> None:
@@ -321,31 +450,40 @@ class GUIController:
         if not self._workdir:
             return []
         exts = {".png", ".jpg", ".jpeg", ".bmp"}
-        found: list[tuple[float, str]] = []
+        found: dict[str, float] = {}
 
-        # Search the working directory and an optional 'results' subfolder
-        search_roots = [self._workdir]
-        results_dir = os.path.join(self._workdir, "results")
-        if os.path.isdir(results_dir):
-            search_roots.append(results_dir)
+        # One walk of the working directory: os.walk already recurses into the
+        # 'results' subfolder, so adding it as a second root would report every
+        # image twice.
+        try:
+            for dirpath, dirnames, filenames in os.walk(self._workdir):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                for name in filenames:
+                    if os.path.splitext(name)[1].lower() not in exts:
+                        continue
+                    full = os.path.abspath(os.path.join(dirpath, name))
+                    try:
+                        mtime = os.path.getmtime(full)
+                    except OSError:
+                        continue
+                    if mtime >= since_time - 1.0:  # small slack
+                        found[full] = mtime
+        except Exception:
+            pass
 
-        for root_dir in search_roots:
-            try:
-                for dirpath, _, filenames in os.walk(root_dir):
-                    for name in filenames:
-                        if os.path.splitext(name)[1].lower() in exts:
-                            full = os.path.join(dirpath, name)
-                            try:
-                                mtime = os.path.getmtime(full)
-                                if mtime >= since_time - 1.0:  # small slack
-                                    found.append((mtime, full))
-                            except OSError:
-                                pass
-            except Exception:
-                pass
+        return sorted(found, key=found.__getitem__)
 
-        found.sort(key=lambda t: t[0])
-        return [p for _, p in found]
+    @staticmethod
+    def _load_opaque(path: str) -> Image.Image:
+        """Open an image, flattening any transparency onto a white background."""
+        img = Image.open(path)
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            bg.paste(img, (0, 0), img)
+            return bg.convert("RGB")
+        if img.mode not in ("RGB", "L"):
+            return img.convert("RGB")
+        return img
 
     def _append_image_card(self, path: str) -> None:
         """
@@ -354,19 +492,13 @@ class GUIController:
         if self.results_frame is None:
             return
         try:
-            img = Image.open(path)
-            # Handle transparency
-            if img.mode in ("RGBA", "LA"):
-                bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                bg.paste(img, (0, 0), img)
-                img = bg.convert("RGB")
-            elif img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
+            img = self._load_opaque(path)
 
             max_width = 1500
             if img.width > max_width:
                 scale = max_width / float(img.width)
-                img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+                img = img.resize((int(img.width * scale), int(img.height * scale)),
+                                 Image.Resampling.LANCZOS)
 
             photo = ImageTk.PhotoImage(img)
             self._image_refs.append(photo)
@@ -380,7 +512,8 @@ class GUIController:
 
             caption_text = os.path.relpath(path, self._workdir or os.getcwd())
             tk.Label(top_row, text=caption_text, anchor="w", bg="white").pack(side=tk.LEFT, fill=tk.X, expand=True)
-            tk.Button(top_row, text="Save PNG", command=lambda p=path: self._save_single_image_png(p)).pack(side=tk.RIGHT)
+            tk.Button(top_row, text="Save PNG",
+                      command=lambda p=path: self._save_single_image_png(p)).pack(side=tk.RIGHT)
 
             lbl = tk.Label(item, image=photo, bg="white")
             lbl.pack(anchor="w")
@@ -396,6 +529,12 @@ class GUIController:
         if self.results_frame is None:
             return
 
+        # The SAVED: lines usually render everything live; only redraw when the
+        # post-run sweep turned up something those lines did not announce.
+        already = {os.path.abspath(p) for p in self._last_image_paths}
+        if already and all(os.path.abspath(p) in already for p in image_paths):
+            return
+
         # Replace content with the final set discovered after completion
         self._clear_results()
 
@@ -409,7 +548,8 @@ class GUIController:
             self._append_image_card(path)
 
     # Saving functions
-    def _default_png_name(self, src_path: str) -> str:
+    @staticmethod
+    def _default_png_name(src_path: str) -> str:
         base, _ = os.path.splitext(os.path.basename(src_path))
         return f"{base}.png"
 
@@ -429,17 +569,7 @@ class GUIController:
             if not target:
                 return
 
-            # Load and convert as needed (handle transparency like in display)
-            img = Image.open(src_path)
-            if img.mode in ("RGBA", "LA"):
-                bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                bg.paste(img, (0, 0), img)
-                img = bg.convert("RGB")
-            elif img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-
-            # Save as PNG
-            img.save(target, format="PNG")
+            self._load_opaque(src_path).save(target, format="PNG")
             messagebox.showinfo("Saved", f"Saved as:\n{target}")
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to save image:\n{e}")
@@ -460,15 +590,8 @@ class GUIController:
         errors: list[str] = []
         for src_path in self._last_image_paths:
             try:
-                img = Image.open(src_path)
-                if img.mode in ("RGBA", "LA"):
-                    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-                    bg.paste(img, (0, 0), img)
-                    img = bg.convert("RGB")
-                elif img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
                 target = os.path.join(folder, self._default_png_name(src_path))
-                img.save(target, format="PNG")
+                self._load_opaque(src_path).save(target, format="PNG")
                 saved += 1
             except Exception as e:
                 errors.append(f"{os.path.basename(src_path)}: {e}")
@@ -476,7 +599,9 @@ class GUIController:
         if errors:
             messagebox.showwarning(
                 "Save Completed with Errors",
-                f"Saved {saved} image(s).\nFailed {len(errors)}:\n" + "\n".join(errors[:10]) + ("..." if len(errors) > 10 else "")
+                f"Saved {saved} image(s).\nFailed {len(errors)}:\n"
+                + "\n".join(errors[:10])
+                + ("..." if len(errors) > 10 else "")
             )
         else:
             messagebox.showinfo("Save Completed", f"Saved {saved} image(s) to:\n{folder}")

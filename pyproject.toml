@@ -21,7 +21,57 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pylint>=3.3",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# --- pylint -------------------------------------------------------------------
+# Picked up automatically by the `pylint` invocation in .github/workflows.
+[tool.pylint.main]
+# Pin the language level to the project's floor rather than inheriting it from
+# whichever interpreter happens to run pylint. Without this, `str | None`
+# annotations (PEP 604, valid from 3.10) are reported as E1131 on older
+# interpreters, so results would differ between a developer's machine and CI.
+py-version = "3.10"
+
+# The analysis modules are a flat package imported by sibling name, so give
+# pylint the same import root the application and tests use.
+init-hook = 'import sys; sys.path.insert(0, "code/python_implementation")'
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.basic]
+# R is the signal autocorrelation in comb_filter_module, named to match the
+# derivation in the surrounding comments; fs/lo/hi/t are conventional too.
+good-names = ["R", "fs", "lo", "hi", "t", "n", "e", "i", "j", "k", "_"]
+# Only require docstrings on substantial functions. Tk callbacks and the
+# one-line logging helpers in run.py are self-describing.
+docstring-min-length = 12
+
+[tool.pylint.design]
+# Raised, not disabled, so genuine runaway growth is still reported. The current
+# ceilings are set by GUIController (a Tk controller legitimately holds one
+# attribute per widget/state item) and by main()/save_plots(), which are
+# straight-line pipeline code rather than tangled logic.
+max-args = 8
+max-positional-arguments = 8
+max-locals = 25
+max-statements = 60
+# GUIController is at 21 and climbing: it currently owns track selection,
+# subprocess control, log streaming, the tempo readout and the image gallery.
+# Splitting those into separate widget classes is the real fix; raising this
+# again instead should be treated as a prompt to do that.
+max-attributes = 22
+max-returns = 8
+
+[tool.pylint."messages control"]
+disable = [
+    # Deliberate throughout: the GUI must survive any single malformed image or
+    # dead subprocess, and the batch loop isolates failures per file and per
+    # band so one bad input cannot abort the whole run. Every site logs the
+    # traceback via logger.exception or surfaces it in a messagebox.
+    "broad-exception-caught",
+]

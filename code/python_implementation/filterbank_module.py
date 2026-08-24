@@ -1,7 +1,9 @@
+"""Audio decoding and the Butterworth filterbank that splits it into bands."""
+import logging
+
 import numpy as np
 from scipy.signal import butter, sosfilt
 import soundfile as sf
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,9 @@ def _read_with_audioread(filename):
     a system ffmpeg install). It yields interleaved 16-bit PCM buffers, which we
     concatenate and normalise to float in [-1, 1].
     """
-    import audioread
+    # Imported lazily: audioread is only needed for the formats libsndfile
+    # cannot handle, so the common path does not pay for it.
+    import audioread  # pylint: disable=import-outside-toplevel
 
     with audioread.audio_open(filename) as f:
         fs = f.samplerate
