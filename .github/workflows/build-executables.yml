@@ -12,6 +12,13 @@ on:
     tags:
       - "v*"
 
+# Supersede in-progress builds for the same ref, but never cancel a tag build:
+# that one publishes the Release, so losing it half-way would leave a tag with
+# an incomplete set of binaries attached.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   build:
     name: ${{ matrix.os }}
@@ -28,6 +35,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       # soundfile ships libsndfile in its wheel on every platform, but install
       # the system library on Linux too as a belt-and-braces fallback.

@@ -1,8 +1,19 @@
 name: CI
 
+# Runs on pushes to main and on pull requests. Deliberately NOT on pushes to
+# every branch: a branch with an open PR would then be built twice for the same
+# commit (once for `push`, once for `pull_request`). Pushes to a branch with no
+# PR yet are not built -- open the PR (even as a draft) to get CI on it.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# One run per ref: pushing twice in quick succession cancels the superseded run
+# instead of letting a stale 12-cell matrix finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -12,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +32,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          # numpy/scipy/matplotlib are large wheels installed on every cell of
+          # the matrix; caching pip's downloads is the single biggest saving.
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
@@ -30,3 +45,30 @@ jobs:
 
       - name: Run smoke tests
         run: python -m pytest -v
+
+  lint:
+    name: pylint / py3.13
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # The project's own dependencies have to be installed, not just pylint:
+      # without numpy/scipy/matplotlib/soundfile/PIL importable, every module
+      # reports import-error and pylint has no type information to work with.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pylint pytest
+
+      # Configuration lives in [tool.pylint.*] in pyproject.toml, which pylint
+      # picks up automatically when run from the repository root.
+      - name: Analysing the code with pylint
+        run: pylint $(git ls-files '*.py')

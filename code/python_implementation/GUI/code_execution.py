@@ -1,4 +1,4 @@
-# file: code/python_implementation/GUI/code_execution.py
+"""Spawning of the rhythm_detection.py worker process for the GUI."""
 import os
 import subprocess
 import sys
@@ -6,16 +6,16 @@ from typing import Sequence
 
 def run_rhythm_detection(file_paths: Sequence[str]) -> subprocess.Popen:
     """
-    Launch rhythm_detection.py in a separate process, passing exactly two file paths.
+    Launch rhythm_detection.py in a separate process, passing one or more file paths.
     Returns:
         subprocess.Popen: the spawned process handle with stdout/stderr pipes
     Raises:
-        ValueError: if file_paths length is not 2
+        ValueError: if no file paths are given
         FileNotFoundError: if script cannot be found
         RuntimeError: if process fails to start
     """
-    if len(file_paths) != 2:
-        raise ValueError("Exactly 2 file paths are required.")
+    if not file_paths:
+        raise ValueError("At least one file path is required.")
 
     # Resolve the path to rhythm_detection.py relative to this file
     script_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "rhythm_detection.py"))
@@ -26,9 +26,14 @@ def run_rhythm_detection(file_paths: Sequence[str]) -> subprocess.Popen:
     arg_files = [os.path.abspath(p) for p in file_paths]
 
     try:
-        # Pipe stdout/stderr so the GUI can display logs
-        proc = subprocess.Popen(
-            [sys.executable, script_path, *arg_files],
+        # Pipe stdout/stderr so the GUI can display logs. -u keeps the child's
+        # stdout unbuffered: without it Python block-buffers when stdout is a
+        # pipe, so the "SAVED:" lines the GUI watches for would only surface
+        # once the process exits.
+        # Not a context manager: the process deliberately outlives this call so
+        # the GUI can stream its output and terminate it on close.
+        proc = subprocess.Popen(  # pylint: disable=consider-using-with
+            [sys.executable, "-u", script_path, *arg_files],
             cwd=os.path.dirname(script_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -73,7 +73,7 @@ def tkinter_install_hint() -> str:
     os_release = Path("/etc/os-release")
     if os_release.is_file():
         fields = {}
-        for line in os_release.read_text().splitlines():
+        for line in os_release.read_text(encoding="utf-8").splitlines():
             if "=" in line:
                 key, _, value = line.partition("=")
                 fields[key] = value.strip().strip('"')
@@ -91,10 +91,12 @@ def tkinter_install_hint() -> str:
 
 
 def check_tkinter(python_exe: Path) -> None:
+    """Abort with platform-specific install advice if the venv has no Tk bindings."""
     result = subprocess.run(
         [str(python_exe), "-c", "import tkinter"],
         capture_output=True,
         text=True,
+        check=False,  # a non-zero exit IS the signal we are testing for
     )
     if result.returncode != 0:
         error("Tkinter is not available for this Python installation.")
@@ -105,6 +107,7 @@ def check_tkinter(python_exe: Path) -> None:
 
 
 def ensure_venv(recreate: bool) -> Path:
+    """Create or reuse the local venv, returning the path to its interpreter."""
     if recreate and VENV_DIR.exists():
         info("Removing existing virtual environment...")
         shutil.rmtree(VENV_DIR)
@@ -145,6 +148,7 @@ def launch_gui(python_exe: Path) -> int:
 
 
 def main() -> int:
+    """Parse arguments, prepare the environment and launch the GUI."""
     parser = argparse.ArgumentParser(description="Launch the Rhythm Detector GUI.")
     parser.add_argument("--recreate", action="store_true",
                         help="Delete and rebuild the virtual environment.")
