@@ -1,9 +1,14 @@
-# code/python_implementation/GUI/file_picker.py
+"""Modal directory-browsing file picker for selecting audio tracks."""
 import os
 import tkinter as tk
 from tkinter import messagebox
 from typing import Callable, Iterable, Tuple
 
+
+# Builds a whole dialog in one pass: the local count and statement count are
+# widget construction plus five small callbacks, not branching complexity.
+# Extracting a class (as GUI_functionality does) would be the structural fix.
+# pylint: disable=too-many-locals,too-many-statements
 def open_file_picker(
     parent: tk.Tk | tk.Toplevel,
     initial_dir: str,
@@ -61,7 +66,7 @@ def open_file_picker(
             if os.path.isfile(full) and name.lower().endswith(audio_exts):
                 listbox_files.insert(tk.END, name)
 
-    def enter_dir(event=None):
+    def enter_dir(_event=None):  # bound to <Double-Button-1>, which passes an event
         sel = listbox_dirs.curselection()
         if not sel:
             return
