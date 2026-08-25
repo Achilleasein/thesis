@@ -23,6 +23,10 @@ except ImportError:
     from file_picker import open_file_picker  # type: ignore
     from code_execution import run_rhythm_detection  # type: ignore
 
+# Must follow code_execution, which is what puts the implementation directory on
+# sys.path -- app_paths lives there, one level up, alongside the worker.
+import app_paths  # pylint: disable=wrong-import-position
+
 # Enqueued once the worker's streams are fully drained, so the UI finalises only
 # after every real output line has been handled.
 _RUN_FINISHED = object()
@@ -87,6 +91,13 @@ class GUIController:
         # Left: primary actions
         btns_frame = tk.Frame(self.controls_frame)
         btns_frame.pack(side=tk.LEFT)
+
+        # Leftmost: the one-click route through the whole pipeline, for a first
+        # run with no file picking. The bundled tracks are never selected
+        # implicitly -- pressing this is the only thing that chooses them.
+        default_btn = tk.Button(btns_frame, text="Default Execution",
+                                command=self.run_default_execution)
+        default_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         run_btn = tk.Button(btns_frame, text="Run Detection", command=self.run_detection_clicked)
         run_btn.pack(side=tk.LEFT, padx=(0, 8))
@@ -311,6 +322,31 @@ class GUIController:
     # -----------------------
     # Run / Clear / Close
     # -----------------------
+    def run_default_execution(self) -> None:
+        """Load the two bundled sample tracks and start the run immediately.
+
+        app_paths.bundled_tracks() returns only files that exist, so a short list
+        means the samples were not shipped with this copy of the application --
+        report where it looked, because the answer differs between a source
+        checkout and an unzipped download.
+        """
+        tracks = app_paths.bundled_tracks()
+        if len(tracks) < 2:
+            messagebox.showerror(
+                "Sample Tracks Not Found",
+                "The bundled sample tracks could not be located.\n\n"
+                f"Looked in:\n{app_paths.music_dir_hint()}\n\n"
+                "Choose your own tracks with the 'Choose...' buttons instead.",
+            )
+            return
+
+        self.track1_path, self.track2_path = tracks[0], tracks[1]
+        self.track1_var.set(self.track1_path)
+        self.track2_var.set(self.track2_path)
+        if self.status_var:
+            self.status_var.set("Default tracks selected.")
+        self.run_detection_clicked()
+
     def run_detection_clicked(self) -> None:
         """Launch the detector on whichever tracks are selected and stream its output."""
         tracks = [p for p in (self.track1_path, self.track2_path) if p]
@@ -326,10 +362,12 @@ class GUIController:
             self._clear_results()
             self._clear_tempo_results()
 
-            # Record start time and working directory
+            # Record start time and the directory the worker writes plots into.
+            # Asking app_paths rather than assuming a path next to this file is
+            # what keeps the post-run image sweep working in a frozen build,
+            # where the plots land in the user's home directory instead.
             self._run_start_time = time.time()
-            # Same workdir as the detection script runs in (parent folder of GUI)
-            self._workdir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+            self._workdir = str(app_paths.results_dir())
 
             # Launch process
             proc = run_rhythm_detection(tracks)
@@ -393,7 +431,8 @@ class GUIController:
         self._tempo_results = []
         self._tempo_placeholder = tk.Label(
             self.tempo_frame,
-            text="Select one or two tracks and press Run Detection.",
+            text="Press Default Execution for the sample tracks, "
+                 "or choose your own and press Run Detection.",
             anchor="w", fg="#555555",
         )
         self._tempo_placeholder.pack(fill=tk.X)
