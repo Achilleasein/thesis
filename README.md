@@ -54,8 +54,11 @@ command for your platform (e.g. `sudo apt install python3-tk`,
 `sudo dnf install python3-tkinter`, `brew install python-tk`, or re-running the
 python.org installer on Windows with the Tcl/Tk option enabled).
 
-In the GUI: pick one or two tracks with the *Choose…* buttons and press **Run
-Detection**. A **Detected Tempo** panel at the top shows one large `<n> BPM`
+In the GUI: press **Default Execution** to analyse the two bundled sample tracks
+straight away, or pick one or two of your own with the *Choose…* buttons and
+press **Run Detection**. The samples are only ever selected by pressing that
+button — nothing is chosen for you when the window opens. A **Detected Tempo**
+panel at the top shows one large `<n> BPM`
 readout per track as soon as each result arrives, the latest also appearing in
 the status bar. Below it the worker's log streams live, and each plot appears as
 soon as it is written. If a run produces no tempo at all the panel says so
@@ -64,13 +67,17 @@ explicitly rather than staying blank, and the log holds the reason.
 ## Running the analysis without the GUI
 
 The detector is a plain CLI program and needs no Tk. It accepts any number of
-audio files, and falls back to the two bundled samples when given none:
+audio files, and analyses nothing unless you name what to analyse:
 
 ```sh
 cd code/python_implementation
-python rhythm_detection.py                       # bundled samples
 python rhythm_detection.py track1.mp3 track2.mp3 # your own files, any count
+python rhythm_detection.py --default-tracks      # the two bundled samples
+python rhythm_detection.py --default-tracks mine.mp3   # both, for comparison
 ```
+
+An empty command line exits 2 with a usage hint rather than quietly analysing
+the samples, which used to make them look like part of every run's output.
 
 Two PNGs per input are written to `code/python_implementation/results/`, a
 per-band breakdown (`<name>_analysis.png`) and the combined curve
@@ -93,25 +100,56 @@ Expect roughly 5 s and ~1.3 GB of peak memory for 6.5 minutes of audio at
 44.1 kHz. Note that everything runs at the full sample rate, unlike the MATLAB
 reference which works at 4096 Hz.
 
-## Standalone executables
+## Standalone application
 
-`rhythm_detection.spec` builds a self-contained CLI binary with PyInstaller —
-no Python installation needed on the target machine:
+`rhythm_detector_gui.spec` builds a self-contained, windowed application with
+PyInstaller — no Python installation needed on the target machine:
 
 ```sh
 python -m pip install pyinstaller
-pyinstaller rhythm_detection.spec      # run from the repository root
+pyinstaller rhythm_detector_gui.spec      # run from the repository root
 ```
 
-Output is `dist/rhythm_detection` (`dist/rhythm_detection.exe` on Windows).
-The build is CLI-only; `tkinter` is excluded, so the GUI is not included.
+Output is `dist/RhythmDetector` (`dist/RhythmDetector.exe` on Windows), plus
+`dist/Rhythm Detector.app` on macOS. The two sample tracks are embedded, so
+**Default Execution** works even from a bundle that has been moved somewhere
+else entirely.
+
+The same binary is also its own analysis worker. Frozen, there is no
+`rhythm_detection.py` on disk to spawn, so the application re-executes itself
+with `--run-detection`; that is also the quickest way to check a build:
+
+```sh
+"dist/Rhythm Detector.app/Contents/MacOS/RhythmDetector" --run-detection --default-tracks
+```
+
+Frozen builds write their plots to `~/RhythmDetector/results`
+(`%USERPROFILE%\RhythmDetector\results` on Windows) rather than next to the
+executable, which would be read-only under `/Applications` or `Program Files`
+and, on macOS, would invalidate the code signature.
+
+### Downloads and the unsigned-application warnings
 
 PyInstaller cannot cross-compile, so the `Build executables` workflow builds
 each platform on its own runner. It runs on pushes to `main` and on manual
-dispatch, and pushing a `v*` tag additionally publishes the three binaries as a
-GitHub Release. Note that a frozen binary looks for its `music_files/` folder
-next to the executable, so pass your audio as arguments instead of relying on
-the bundled defaults.
+dispatch, and pushing a `v*` tag additionally publishes the zips as a GitHub
+Release. Each zip contains the application, a visible `music_files/` folder and
+a `README-FIRST.txt` (the per-platform files under `packaging/`).
+
+Neither the macOS nor the Windows build is signed with a real certificate —
+both require a paid developer account, and this is a thesis project — so both
+operating systems will object on first launch:
+
+- **macOS**: the bundle is *ad-hoc* signed in CI, which is what lets it execute
+  at all on Apple Silicon, but Gatekeeper still blocks it. Right-click → **Open**
+  (macOS 15+: System Settings → Privacy & Security → **Open Anyway**), or run
+  `xattr -dr com.apple.quarantine "Rhythm Detector.app"` once.
+- **Windows**: SmartScreen shows "Windows protected your PC" — click **More
+  info** → **Run anyway**.
+
+The macOS zip is built with `ditto` rather than `zip`, because `zip` flattens
+the `.app`'s symlinks and drops the signature, which would leave the download
+broken in exactly the way the signing step exists to prevent.
 
 ## Tests
 
@@ -129,9 +167,15 @@ The headless smoke tests run on Windows, macOS and Linux across Python
   cannot silently regress accuracy;
 - the analysis helpers in isolation — band weighting, peak picking and plot
   decimation, each with the failure mode it exists to prevent;
-- the GUI layer (`tests/test_gui_smoke.py`), which imports every GUI module and
-  exercises the image-flattening helper without creating a Tk root, so it runs
-  with no display. These tests skip automatically if the interpreter has no Tk.
+- the GUI layer (`tests/test_gui_smoke.py`), which imports every GUI module,
+  checks the **Default Execution** button selects both samples and hands over to
+  the normal run path, and exercises the image-flattening helper. These tests
+  skip automatically if the interpreter has no Tk or no display;
+- the build-and-packaging contracts (`tests/test_packaging.py`): where the
+  sample tracks are looked up, that an empty command line analyses nothing, and
+  that the two halves of the `--run-detection` worker handshake agree. Those
+  frozen code paths cannot be exercised from a checkout, so what is pinned is
+  the agreement between the modules that implement them.
 
 **Caveat on those expected values.** `celebration = 80` is well supported: five
 of six bands and an independent spectral-flux estimate (79.5) agree.
@@ -163,8 +207,14 @@ Two workflows:
   on pull requests. It intentionally does *not* run on pushes to every branch,
   which would build each PR commit twice; open the PR (a draft is enough) to get
   CI on a branch.
-- **`Build executables`** — the three PyInstaller binaries, on pushes to `main`,
-  manual dispatch, and `v*` tags (which also publish a Release).
+- **`Build executables`** — the three PyInstaller applications, on pushes to
+  `main`, manual dispatch, and `v*` tags (which also publish a Release). Each
+  runner verifies Tk is importable before building (PyInstaller only *warns*
+  about a module it cannot find, so a broken Tk would otherwise ship a GUI
+  application with no GUI), then runs the frozen binary in `--run-detection`
+  mode and requires a `TEMPO:` and a `SAVED:` line — a missing hidden import
+  produces a window that fails on every run, and that is the only step that
+  would catch it before a user did.
 
 Both cache pip downloads and cancel superseded runs for the same ref, except
 tag builds, which are never cancelled because they publish release assets.

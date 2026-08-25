@@ -3,13 +3,16 @@
 Decodes each input file, splits it into frequency bands, extracts an onset
 signal per band and scores it against a bank of comb filters, then writes the
 analysis plots and reports the detected fundamental tempo.
+
+Files to analyse must be named explicitly, either as arguments or via
+``--default-tracks`` for the two bundled samples.
 """
 import logging
-import os
 import sys
 
 import numpy as np
 
+import app_paths
 from comb_filter_module import analyze_tempo
 from diff_rect_module import diff_rect
 from envelope_module import get_envelope
@@ -57,51 +60,66 @@ def format_tempo_line(filename: str, bpm: float) -> str:
     return f"TEMPO: {bpm:.2f} BPM {filename}"
 
 
-def default_tracks() -> list[str]:
-    """Paths to the bundled sample tracks, used when the CLI provides no files.
+DEFAULT_TRACKS_FLAG = "--default-tracks"
 
-    The audio lives in <repo>/music_files, i.e. two levels above this module
-    (<repo>/code/python_implementation/). When frozen by PyInstaller there is no
-    repo tree, so look for a music_files folder next to the executable instead.
+
+def default_tracks() -> list[str]:
+    """Paths to the bundled sample tracks that are present on this machine.
+
+    Thin wrapper over app_paths.bundled_tracks(), which knows the several places
+    the audio can live depending on whether this is a source checkout, a bundle
+    with the tracks embedded, or an unzipped download with a sibling
+    music_files/ folder. Only existing paths come back, so a short list here
+    means the samples are genuinely unavailable.
     """
-    if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
-    else:
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    return [os.path.join(base, "music_files", name)
-            for name in ("pathfinder.mp3", "celebration.mp3")]
+    return app_paths.bundled_tracks()
+
+
+def resolve_input_files(argv: list[str]) -> tuple[list[str], int]:
+    """Turn command-line arguments into the list of files to analyse.
+
+    Returns ``(files, exit_code)``; a non-zero exit code means nothing should be
+    analysed and the reason has already been logged.
+
+    Selecting the bundled samples is deliberate, never implicit: an empty
+    command line used to quietly analyse them, which made the two sample tracks
+    look like part of every run's output.
+    """
+    args = [a for a in argv if a.strip()]
+
+    if DEFAULT_TRACKS_FLAG in args:
+        file_paths = default_tracks()
+        if len(file_paths) < len(app_paths.SAMPLE_TRACK_NAMES):
+            logger.error("%s was given but the bundled sample tracks are not available. "
+                         "Looked in:\n%s", DEFAULT_TRACKS_FLAG, app_paths.music_dir_hint())
+            return [], 2
+        logger.info("Using the %d bundled sample track(s):\n%s", len(file_paths),
+                    "\n".join(f"  {i}) {p}" for i, p in enumerate(file_paths, start=1)))
+        # Any other arguments are analysed too, so the samples can be compared
+        # against a track of your own in a single run.
+        file_paths += [a for a in args if a != DEFAULT_TRACKS_FLAG]
+        return file_paths, 0
+
+    if not args:
+        logger.error("No input files given.")
+        logger.error("Pass the audio files to analyse as arguments, e.g. "
+                     "`python rhythm_detection.py track1.mp3 track2.mp3`, "
+                     "or use %s for the two bundled samples.", DEFAULT_TRACKS_FLAG)
+        return [], 2
+
+    logger.info("Using %d CLI-provided file(s):\n%s", len(args),
+                "\n".join(f"  {i}) {p}" for i, p in enumerate(args, start=1)))
+    return args, 0
 
 
 def main() -> int:
     """Analyse each input file and write its plots. Returns a process exit code."""
-    # Determine input files: analyse whatever the CLI provides, else fall back
-    # to the bundled sample tracks.
-    cli_files = [p for p in sys.argv[1:] if p.strip()]
-    if cli_files:
-        file_paths = cli_files
-        logger.info("Using %d CLI-provided file(s):\n%s", len(file_paths),
-                    "\n".join(f"  {i}) {p}" for i, p in enumerate(file_paths, start=1)))
-    else:
-        file_paths = default_tracks()
-        logger.warning("No files given on the command line; falling back to defaults:\n%s",
-                       "\n".join(f"  {i}) {p}" for i, p in enumerate(file_paths, start=1)))
-        missing = [p for p in file_paths if not os.path.isfile(p)]
-        if missing:
-            logger.error("The bundled sample tracks are not available:\n%s",
-                         "\n".join(f"  {p}" for p in missing))
-            logger.error("Pass the audio files to analyse as arguments, e.g. "
-                         "`python rhythm_detection.py track1.mp3 track2.mp3`.")
-            return 2
+    file_paths, exit_code = resolve_input_files(sys.argv[1:])
+    if exit_code:
+        return exit_code
 
-    # Prepare output directory. When frozen by PyInstaller the script lives in a
-    # temporary extraction dir (_MEIPASS) that is deleted on exit, so write the
-    # results next to the executable instead; otherwise write next to this script.
-    if getattr(sys, "frozen", False):
-        script_dir = os.path.dirname(sys.executable)
-    else:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-    results_dir = os.path.join(script_dir, "results")
-    os.makedirs(results_dir, exist_ok=True)
+    # Frozen builds cannot write next to the executable (see app_paths.results_dir).
+    results_dir = app_paths.ensure_results_dir()
     logger.info("Results directory: %s", results_dir)
 
     # Imported here rather than at module scope so that importing this module
